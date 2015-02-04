@@ -6,56 +6,22 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
+const char* header_fields[] = {
+	"content-type",
+	"content-length",
+	"host"
+};
+#define HEADER_LENGTH (sizeof(header_fields)/sizeof(char*))
+
 typedef struct header {
-	//general:
-	char* Cache_Control;
-	char* Connection;
-	char* Date;
-	char* Pragma;
-	char* Trailer;
-	char* Transfer_Encoding;
-	char* Upgrade;
-	char* Via;
-	char* Warning;
-	//request:
-	char* Accept;
-	char* Accept_Charset;
-	char* Accept_Encoding;
-	char* Accept_Language;
-	char* Authorization;
-	char* Expect;
-	char* From;
-	char* Host;
-	char* If_Match;
-	char* If_Modified_Since;
-	char* If_None_Match;
-	char* If_Range;
-	char* If_Unmodified_Since;
-	char* Max_Forwards;
-	char* Proxy_Authorization;
-	char* Range;
-	char* Referer;
-	char* TE;
-	char* User_Agent;
-	//response:
-	char* Allow;
-	char* Content_Encoding;
-	char* Content_Language;
-	int Content_Length;
-	char* Content_Location;
-	char* Content_MD5;
-	char* Content_Range;
-	char* Content_Type;
-	char* Expires;
-	char* Last_Modified;
-	char* extension_header;
+	char* values[HEADER_LENGTH];
 } header_t;
 
 typedef struct request {
 	int version_major;
 	int version_minor;
-	char * path;
-	char * method; //TODO: make enum
+	char path[512];
+	char method[16]; //TODO: make enum
 	header_t header;
 	char* body;
 } request_t;
@@ -66,75 +32,184 @@ void error(const char *msg)
     exit(1);
 }
 
-char* read_request(int sockfd) {
-	char * buffer = malloc(256);
-	bzero(buffer, 256);
-	int buf_size = 256;
-	int len;
-	int pos = 0;
-	//TODO: loop
-	while(1){
-		len = read(sockfd, buffer+pos, buf_size-1-pos);
-		if (len < 0)
-			error("ERORR reading from socket");
-		int strl = strlen(buffer);
-		if(memcmp(buffer+strl-2, "\n\n", 2) == 0 || memcmp(buffer+strl-4, "\r\n\r\n", 4) == 0 || len == 0) {
-			buffer[strl] = 0;
-			return buffer;
-		}
-		if(len > buf_size-4) {
-			buf_size *= 2;
-			buffer = realloc(buffer, buf_size);
-		}
-		pos = len;
-	}
+int set_header(header_t* header, const char* field, char* value) {
+	int i;
+    for (i = 0; i < HEADER_LENGTH; i++) {
+        if(strcasecmp(header_fields[i], field) == 0) {
+            break;
+        }
+    }
+    if (i == HEADER_LENGTH) {
+        return -1;
+    }
+    header->values[i] = value;
+    printf("set %s to %s\n", field, value);
+    return 0;
 }
 
-int parse_request(char* buffer, request_t* req) {
+char* get_header(header_t* header, const char* field) {
+	int i;
+    for (i = 0; i < HEADER_LENGTH; i++) {
+        if(strcasecmp(header_fields[i], field) == 0) {
+            break;
+        }
+    }
+    if (i == HEADER_LENGTH) {
+        return NULL;
+    }
+    return header->values[i];
+}
+
+int free_header(header_t* header) {
+	int i;
+    for (i = 0; i < HEADER_LENGTH; i++) {
+    	if(header->values[i])
+    		free(header->values[i]);
+    }
+    return 0;
+}
+
+void print_header(header_t* header) {
+	int i;
+    for (i = 0; i < HEADER_LENGTH; i++) {
+    	if(header->values[i])
+    		printf("%s: %s\n", header_fields[i], header->values[i]);
+    }
+}
+
+int read_request(int sockfd, request_t* req) {
+	//TODO:
+	//read max amount of bytes(read while len == cur_len)
+	//parse current header
+	//check if done
+	//repeat
+	int buf_len = 256;
+	int len;
+	char* buffer = malloc(buf_len);
+	int total_len = 0;
+	//loop:
+	while(1) {
+		len = read(sockfd, buffer+total_len, buf_len-total_len-1);
+		if(len != buf_len-total_len-1) { //read all available data:
+			int r = parse_request(buffer, total_len, req);
+			if (r == 1) { //check if we need more data:
+				free(buffer);
+				return 1; //no, done
+			} else if (r < 0) {
+				error("ERROR parsing request");
+			}
+			else {
+				puts("need more data");
+			}
+		}
+
+		if(total_len+len > buf_len - 10) {
+			buf_len *= 2;
+			buffer = realloc(buffer, buf_len);
+		}
+		total_len += len;
+	}
+
+}
+
+int parse_request(const char* buffer, int bufferlen, request_t* req) {
+	//TODO: don't reparse whole request when requesting more bytes
 	int i = 0;
-	char *pos = buffer;
+	const char * pos = buffer;
+
+	if (bufferlen < 10) // need at least 10 bytes
+		return 0;
+
+	//request-line:
 	char method[16];
-	while(buffer[i] != ' ') {
+	while(buffer[i] != ' ' && i < 16) {
 		method[i] = buffer[i];
 		i++;
 	}
 	method[i] = '\0';
-	pos = buffer + i+1; //absorb space
+	pos +=  i+1; //absorb space
+
+	if (buffer - pos > bufferlen || i == 15) {
+		return 0; //need more data
+	}
+
 	i = 0;
 	char URI[512];
-	while(pos[i] != ' ') {
+	while(pos[i] != ' ' && i < 512) {
 		URI[i] = pos[i];
 		i++;
 	}
 	URI[i] = '\0';
-
 	pos += i+1;
+
+	if (buffer - pos + 5 > bufferlen || i == 511) {
+		return 0; //need more data
+	}
 	
 	if(memcmp(pos, "HTTP/", 5) != 0){
 		return -1;
 	}
 
 	pos += 5;
+
 	char major[16];
 	i = 0;
-	while(pos[i] != 0) {
+	while(pos[i] != '.' && i < 16) {
 		major[i] = pos[i];
 		i++;
 	}
 	major[i] = '\0';
 	pos += i+1;
 
+	if (buffer - pos > bufferlen || i == 15) {
+		return 0; //need more data
+	}
+
 	char minor[16];
 	i = 0;
-	while(pos[i] != 0) {
+	while(pos[i] != '\n' && i < 16) { //might absorb \r
 		minor[i] = pos[i];
 		i++;
 	}
 	minor[i] = '\0';
 	pos += i+1;
+	if (buffer - pos > bufferlen || i == 15) {
+		return 0; //need more data
+	}
 
-	
-	return 0;
+	strcpy(req->method, method);
+	strcpy(req->path, URI);
+	req->version_major = atoi(major);
+	req->version_minor = atoi(minor);
+
+	//headers:
+	while(pos[0] != '\n' && pos[0] != '\r' && buffer - pos < bufferlen) {
+		char key[32];
+		i = 0;
+		while(pos[i] != ':' && i < 32) {
+			key[i] = pos[i];
+			i++;
+		}
+		key[i] = '\0';
+		pos += i+1;
+
+		char* value = malloc(512);
+		i = 0;
+		while(pos[i] != '\n' && i < 512) {
+			value[i] = pos[i];
+			i++;
+		}
+		value[i] = '\0';
+		pos += i+1;
+		set_header(&(req->header), key, value);
+
+		//puts(key);
+		//puts(value);
+
+	}
+	//contents:
+
+	return 1;
 }
 
 int main(int argc, char* argv[]) {
@@ -143,7 +218,6 @@ int main(int argc, char* argv[]) {
 	int sockfd, newsockfd, portno;
 	socklen_t clilen;
 	struct sockaddr_in serv_addr, cli_addr;
-	char* buffer;
 	int buflen = 0;
 
 	//get port
@@ -180,19 +254,16 @@ int main(int argc, char* argv[]) {
 		newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
 		if (newsockfd < 0) 
 	        error("ERROR on accept");
-		//read request	(ignoring keep-alive)
-		buffer = read_request(newsockfd);
-		//print request
-     	printf("strlen: %d\n", strlen(buffer));
-		printf("request:\n%sEOR\n", buffer);
 		//parse request
-		
 		request_t req = {0};
-		parse_request(buffer, &req);
+		read_request(newsockfd, &req);
+		printf("method: %s\npath: %s\nversion: %d.%d\n",
+			req.method, req.path, req.version_major, req.version_minor);
+		print_header(&(req.header));
 		//call routes based on request(and respond)
 		//close connection gracefully
+		free_header(&(req.header));
 		close(newsockfd);
-		free(buffer);
 		//repeat
 	}
 	//cleanup
