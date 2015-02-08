@@ -1,0 +1,24 @@
+data:
+- list of clients
+
+
+main:
+- setup master socket
+- add master to fd_set
+- loop (running):
+	- copy fd_set to fd_set2
+	- select on fd_set2
+	- loop over returned sockets:
+		- if socket == master socket:
+			- accept client
+			- add to list
+		- else:
+			- read available data
+			- find client based on fd (better way?)
+			- add to buffer
+			- parse buffer
+			- need more:
+				- return & wait for next loop
+			- done:
+				- call route for response
+				- send response

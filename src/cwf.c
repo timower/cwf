@@ -8,173 +8,20 @@
 
 #include "cwf.h"
 
-int read_request(int sockfd, request_t* req) {
-	int buf_len = 256;
-	int len;
-	char* buffer = malloc(buf_len);
-	int total_len = 0;
-	//loop:
-	while(1) {
-		len = read(sockfd, buffer+total_len, buf_len-total_len-1);
-		if (len <= 0) {
-			return -1;
-		}
-		if(len != buf_len-total_len-1) { //read all available data:
-			int r = parse_request(buffer, total_len+len, req);
-			if (r == 1) { //check if we need more data:
-				//DEBUG/
-				free(buffer);
-				return 1; //no, done
-			} else if (r < 0) {
-				return -1;
-			}
-			else {
-				//DEBUG:
-				puts("need more data");
-			}
-		}
+#include "request.h"
+#include "response.h"
+#include "buffer.h" 
+#include "clients.h"
 
-		if(total_len+len > buf_len - 10) {
-			buf_len *= 2;
-			buffer = realloc(buffer, buf_len);
-		}
-		total_len += len;
-	}
-
-}
-
-int parse_request(const char* buffer, int bufferlen, request_t* req) {
-	//TODO: don't reparse whole request when requesting more bytes
-	int i = 0;
-	const char * pos = buffer;
-
-	if (bufferlen < 10){ // need at least 10 bytes
-		puts("0");
-		return 0;
-	}
-
-	//request-line:
-	char method[16];
-	while(buffer[i] != ' ' && i < 16) {
-		method[i] = buffer[i];
-		i++;
-	}
-	method[i] = '\0';
-	pos +=  i+1; //absorb space
-	if (pos - buffer > bufferlen || i == 15) {
-		puts("1"); return 0; //need more data
-	}
-
-	i = 0;
-	char URI[512];
-	while(pos[i] != ' ' && i < 512) {
-		URI[i] = pos[i];
-		i++;
-	}
-	URI[i] = '\0';
-	pos += i+1;
-
-	if (pos - buffer + 5 > bufferlen || i == 511) {
-		puts("2"); return 0; //need more data
-	}
-	
-	if(memcmp(pos, "HTTP/", 5) != 0){
-		return -1;
-	}
-
-	pos += 5;
-	
-	char major[16];
-	i = 0;
-	while(pos[i] != '.' && i < 16) {
-		major[i] = pos[i];
-		i++;
-	}
-	major[i] = '\0';
-	pos += i+1;
-
-	if (pos - buffer > bufferlen || i == 15) {
-		puts("3"); return 0; //need more data
-	}
-
-	char minor[16];
-	i = 0;
-	while(pos[i] != '\n' && i < 16) { //might absorb \r
-		minor[i] = pos[i];
-		i++;
-	}
-	minor[i] = '\0';
-	pos += i+1;
-	if (pos - buffer >= bufferlen || i == 15) {
-		puts("4"); return 0; //need more data
-	}
-
-	strcpy(req->method, method);
-	strcpy(req->path, URI);
-	req->version_major = atoi(major);
-	req->version_minor = atoi(minor);
-
-	//headers:
-	while(pos[0] != '\n' && pos[0] != '\r' && pos - buffer < bufferlen) {
-		char key[32];
-		i = 0;
-		while(pos[i] != ':' && i < 32) {
-			key[i] = pos[i];
-			i++;
-		}
-		key[i] = '\0';
-		pos += i+1;
-
-		char* value = malloc(512);
-		i = 0;
-		while(pos[i] == ' ' || pos[i] == '\t') {
-			i++;
-		}
-		pos += i;
-		i = 0;
-		while(pos[i] != '\n' && i < 512) {
-			value[i] = pos[i];
-			i++;
-		}
-		value[i] = '\0';
-		
-		pos += i+1;
-		set_header(&(req->header), key, value);
-	}
-	if (pos - buffer >= bufferlen) {
-		puts("5"); return 0;
-	}
-
-	if (pos[0] == '\r')
-		pos++;
-	if(pos[0] != '\n')
-		return -1;
-	pos++; //absorb /n
-	//contents:
-	char* cl = get_header(&(req->header), "Content-Length");
-	if(cl) {
-		int length = atoi(cl);
-		if(bufferlen-(pos-buffer) < length) {
-			puts("6");
-			return 0;
-		}
-		char* body = malloc(length+1);
-		for(i = 0; i < length; i++) {
-			body[i] = pos[i];
-		}
-		req->body = body;
-	}
-	//done!!
-	return 1;
-}
-
-int CWF_start(int port) {
-
-	//setup listen socket
+int CWF_start(app_t* ap, int port) {
+	fd_set orig_set, read_set;
+	int max_fd, nready;
+	int i;
 	int sockfd, newsockfd;
 	socklen_t clilen;
 	struct sockaddr_in serv_addr, cli_addr;
 	int buflen = 0;
+	char buffer[1024];
     
     //create socket
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -204,37 +51,134 @@ int CWF_start(int port) {
 
     listen(sockfd, 10);
 
+    //setup fd_sets:
+    FD_ZERO(&orig_set);
+    FD_ZERO(&read_set);
+
+    FD_SET(sockfd, &orig_set);
+    max_fd = sockfd;
+
+    //setup clients:
+    init_clients();
+
 	while (1) {
-		//accept 1 client
-		clilen = sizeof(cli_addr);
-
-		newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
-		if (newsockfd < 0) {
-	        puts("ERROR on accept");
-	        return -1;
+		memcpy(&read_set, &orig_set, sizeof(orig_set));
+		puts("selecting...");
+		nready = select(max_fd+1, &read_set, NULL, NULL, NULL); // wait for socket ready
+		if (nready == -1) {
+			puts("ERROR select");
+			return -1;
 		}
+		for(i = 0; i <= max_fd && nready > 0; i++) {
+			if (FD_ISSET(i, &read_set)) {
+				nready--;
+				if (i == sockfd) {
+					puts("new client available");
+					clilen = sizeof(cli_addr);
+					newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
+					if (newsockfd < 0) {
+						puts("ERROR accepting");
+						return -1;
+					}
+					FD_SET(newsockfd, &orig_set);
 
-		//TODO: thread/fork/???
-		request_t req = {0};
-		header_t zero = {0};
-		req.header = zero;
-		if (read_request(newsockfd, &req) < 0) {
-			puts("error reading request");
+					client_t* nclient = new_client();
+					nclient->socket = newsockfd;
+					init_buffer(&(nclient->buffer), 512);
+
+					if (newsockfd > max_fd)
+						max_fd = newsockfd;
+				} else {
+					client_t* client = find_client(i);
+					if(client == NULL) {
+						puts("ERROR finding client!!");
+						return -1;
+					}
+					
+					int n = read(i, buffer, sizeof(buffer)); //TODO: fix buffer
+					if (n <= 0) {
+						puts("ERROR on read");
+						close(i);
+						FD_CLR(i, &orig_set);
+						free_client(client);
+						continue;
+					}
+					append_buffer(&(client->buffer), buffer, n);
+
+					request_t req = {0};
+					int ret = parse_request(client->buffer.buffer, client->buffer.pos, &req);
+					if (ret < 0){
+						puts("ERROR parsing buffer");
+						close(i);
+						FD_CLR(i, &orig_set);
+						free_client(client);
+						free_buffer(&(req.body));
+						continue;
+					} else if(ret == 0) {
+						continue;
+					}
+					//print:
+
+					printf("method: %s path: %s version: %d.%d\n",
+						req.method, req.path, req.version_major, req.version_minor);
+					response_t res = {0};
+					res.version_major = 1;
+					res.version_minor = 1;
+					res.status_code = 200;
+					res.reason_phrase = "OK";
+					init_buffer(&(res.body), 512);
+					//TODO:
+					set_header(&(res.header), "Content-Type", strdup("text/html"));
+
+					route_func f = get_route(ap, req.path); //latency?
+
+					if (f) {
+						f(&req, &res);
+					}else{
+						puts("404");
+						res.status_code = 404;
+						res.reason_phrase = "not found";
+
+						char msg[] = "404 not found";
+						append_bufferStr(&(res.body), msg);
+					}
+
+					if(res.body.buffer) {
+						char length[16];
+						sprintf(length, "%d", res.body.pos);
+						set_header(&(res.header), "Content-Length", strdup(length));
+					}
+					//send response:
+					int len;
+					char* buff = gen_response(&res, &len);
+					if (write(newsockfd, buff, len) < 0)
+						puts("error responding");
+					free(buff);
+
+					char* con = get_header(&(req.header), "connection");
+					if(!con || !(strcasecmp(con, "keep-alive") == 0)) {
+						puts("not keep alive");
+						close(i);
+						FD_CLR(i, &orig_set);
+						free_client(client);
+					} else {
+						clear_buffer(&(client->buffer));
+					}
+
+
+					//free:
+					free_header(&(res.header));
+					free_buffer(&(res.body));
+					//close connection gracefully
+					free_header(&(req.header));
+					free_buffer(&(req.body));
+					;
+					//reset buffer:
+					
+					//puts(buffer);
+				}
+			}
 		}
-
-		//print:
-		printf("method: %s\npath: %s\nversion: %d.%d\n",
-			req.method, req.path, req.version_major, req.version_minor);
-		print_header(&(req.header));
-		if (req.body)
-			printf("\nbody\n %s\n", req.body);
-		//call routes based on request(and respond)
-
-		//close connection gracefully
-		free_header(&(req.header));
-		if(req.body)
-			free(req.body);
-		close(newsockfd);
 	}
 	close(sockfd);
 }

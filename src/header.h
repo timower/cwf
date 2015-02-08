@@ -42,7 +42,16 @@ static const char* header_fields[] = {
 	"Content-Type",
 	"Expires",
 	"Last-Modified",
-	"extension-header"
+	"extension-header",
+	"Accept-Ranges",
+	"Age",
+	"ETag",
+	"Location",
+	"Proxy-Authenticate",
+	"Retry-After",
+	"Server",
+	"Vary",
+	"WWW-Authenticate"
 };
 
 typedef struct header {
@@ -53,4 +62,5 @@ int set_header(header_t* header, const char* field, char* value);
 char* get_header(header_t* header, const char* field);
 int free_header(header_t* header);
 void print_header(header_t* header);
+void sprint_header(char* buf, header_t* header);
 #endif

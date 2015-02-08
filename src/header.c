@@ -33,8 +33,10 @@ char* get_header(header_t* header, const char* field) {
 int free_header(header_t* header) {
 	int i;
     for (i = 0; i < HEADER_LENGTH; i++) {
-    	if(header->values[i])
+    	if(header->values[i]){
     		free(header->values[i]);
+            header->values[i] = NULL;
+        }
     }
     return 0;
 }
@@ -44,5 +46,15 @@ void print_header(header_t* header) {
     for (i = 0; i < HEADER_LENGTH; i++) {
     	if(header->values[i])
     		printf("%s: %s\n", header_fields[i], header->values[i]);
+    }
+}
+
+void sprint_header(char* buf, header_t* header) {
+    int i;
+    char* pos = buf;
+    for (i = 0; i < HEADER_LENGTH; i++) {
+        if(header->values[i]){
+            pos += sprintf(pos, "%s: %s\r\n", header_fields[i], header->values[i]);
+        }
     }
 }

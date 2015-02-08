@@ -5,7 +5,17 @@
 #include <sys/types.h> 
 #include <sys/socket.h>
 #include <netinet/in.h>
+
 #include "cwf.h"
+#include "request.h"
+#include "response.h"
+#include "buffer.h"
+
+void basic_route(request_t* req, response_t* res) {
+	append_bufferStr(&(res->body), "<h1>hello, world</h1>");
+	append_bufferStr(&(res->body), "<br/>test");
+	
+}
 
 int main(int argc, char* argv[]){
 	if (argc < 2) {
@@ -13,6 +23,13 @@ int main(int argc, char* argv[]){
 		return -1;
 	}
 	int port = atoi(argv[1]);
-	CWF_start(port);
+
+	app_t* a = new_app();
+	set_route(a, "/", basic_route);
+	set_route(a, "/lol", basic_route);
+	
+	CWF_start(a, port);
+	free(a);
+
 	return 0;
 }
