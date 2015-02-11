@@ -14,5 +14,5 @@ typedef struct app {
 
 app_t* new_app();
 void set_route(app_t*, char*, route_func);
-route_func get_route(app_t*, char*);
+route_func get_route(app_t*, char*, request_t* req);
 #endif

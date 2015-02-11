@@ -130,7 +130,7 @@ int CWF_start(app_t* ap, int port) {
 					//TODO:
 					set_header(&(res.header), "Content-Type", strdup("text/html"));
 
-					route_func f = get_route(ap, req.path); //latency?
+					route_func f = get_route(ap, req.path, &req); //latency?
 
 					if (f) {
 						f(&req, &res);
@@ -142,19 +142,21 @@ int CWF_start(app_t* ap, int port) {
 						char msg[] = "404 not found";
 						append_bufferStr(&(res.body), msg);
 					}
-
+					
 					if(res.body.buffer) {
 						char length[16];
 						sprintf(length, "%d", res.body.pos);
 						set_header(&(res.header), "Content-Length", strdup(length));
 					}
+					
 					//send response:
 					int len;
 					char* buff = gen_response(&res, &len);
 					if (write(newsockfd, buff, len) < 0)
 						puts("error responding");
-					free(buff);
-
+					
+					free(buff); //double free for some reason
+					
 					char* con = get_header(&(req.header), "connection");
 					if(!con || !(strcasecmp(con, "keep-alive") == 0)) {
 						puts("not keep alive");
@@ -164,15 +166,22 @@ int CWF_start(app_t* ap, int port) {
 					} else {
 						clear_buffer(&(client->buffer));
 					}
-
-
+					
+					int i;
+					for(i = 0; i < 10; i++){
+						if(req.rp.params[i]){
+							free(req.rp.params[i]);
+							req.rp.params[i] = NULL;
+						}
+					}
+					
 					//free:
 					free_header(&(res.header));
 					free_buffer(&(res.body));
 					//close connection gracefully
 					free_header(&(req.header));
 					free_buffer(&(req.body));
-					;
+					
 					//reset buffer:
 					
 					//puts(buffer);
