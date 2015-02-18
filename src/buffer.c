@@ -14,6 +14,7 @@ static int grow_buffer(buffer_t* buffer, int size) {
 		return 0;
 	}
 	buffer->buffer = newptr;
+	return 1;
 
 }
 

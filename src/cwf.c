@@ -13,18 +13,12 @@
 #include "buffer.h" 
 #include "clients.h"
 
-int CWF_start(app_t* ap, int port) {
-	fd_set orig_set, read_set;
-	int max_fd, nready;
-	int i;
-	int sockfd, newsockfd;
-	socklen_t clilen;
-	struct sockaddr_in serv_addr, cli_addr;
-	int buflen = 0;
-	char buffer[1024];
-    
-    //create socket
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+#include "config.h"
+
+int init_socket(int port) {
+	struct sockaddr_in serv_addr;
+	//create socket
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
         puts("ERROR opening socket");
         return -1;
@@ -48,6 +42,20 @@ int CWF_start(app_t* ap, int port) {
             puts("ERROR on binding");
             return -1;
     }
+    return sockfd;
+}
+
+int CWF_start(app_t* ap, int port) {
+	fd_set orig_set, read_set;
+	int max_fd, nready;
+	int i;
+	int newsockfd;
+	char buffer[1024];
+
+    int sockfd = init_socket(port);
+    if(sockfd == -1) {
+    	return -1;
+    }
 
     listen(sockfd, 10);
 
@@ -63,19 +71,23 @@ int CWF_start(app_t* ap, int port) {
 
 	while (1) {
 		memcpy(&read_set, &orig_set, sizeof(orig_set));
+#if DEBUG
 		puts("selecting...");
+#endif
 		nready = select(max_fd+1, &read_set, NULL, NULL, NULL); // wait for socket ready
 		if (nready == -1) {
 			puts("ERROR select");
 			return -1;
 		}
+
 		for(i = 0; i <= max_fd && nready > 0; i++) {
 			if (FD_ISSET(i, &read_set)) {
 				nready--;
 				if (i == sockfd) {
+#if DEBUG
 					puts("new client available");
-					clilen = sizeof(cli_addr);
-					newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
+#endif
+					newsockfd = accept(sockfd, NULL, NULL);
 					if (newsockfd < 0) {
 						puts("ERROR accepting");
 						return -1;
@@ -92,10 +104,11 @@ int CWF_start(app_t* ap, int port) {
 					client_t* client = find_client(i);
 					if(client == NULL) {
 						puts("ERROR finding client!!");
+						close(i);
 						return -1;
 					}
 					
-					int n = read(i, buffer, sizeof(buffer)); //TODO: fix buffer
+					int n = read(i, buffer, sizeof(buffer));
 					if (n <= 0) {
 						puts("ERROR on read");
 						close(i);
@@ -118,9 +131,10 @@ int CWF_start(app_t* ap, int port) {
 						continue;
 					}
 					//print:
-
+#if DEBUG
 					printf("method: %s path: %s version: %d.%d\n",
 						req.method, req.path, req.version_major, req.version_minor);
+#endif
 					response_t res = {0};
 					res.version_major = 1;
 					res.version_minor = 1;
@@ -135,10 +149,11 @@ int CWF_start(app_t* ap, int port) {
 					if (f) {
 						f(&req, &res);
 					}else{
+#if DEBUG
 						puts("404");
+#endif
 						res.status_code = 404;
 						res.reason_phrase = "not found";
-
 						char msg[] = "404 not found";
 						append_bufferStr(&(res.body), msg);
 					}
@@ -148,6 +163,7 @@ int CWF_start(app_t* ap, int port) {
 						sprintf(length, "%d", res.body.pos);
 						set_header(&(res.header), "Content-Length", strdup(length));
 					}
+
 					//send response:
 					int len;
 					char* buff = gen_response(&res, &len);
@@ -157,7 +173,9 @@ int CWF_start(app_t* ap, int port) {
 
 					char* con = get_header(&(req.header), "connection");
 					if(!con || !(strcasecmp(con, "keep-alive") == 0)) {
+#if DEBUG
 						puts("not keep alive");
+#endif
 						close(i);
 						FD_CLR(i, &orig_set);
 						free_client(client);
@@ -165,17 +183,12 @@ int CWF_start(app_t* ap, int port) {
 						clear_buffer(&(client->buffer));
 					}
 
-
 					//free:
 					free_header(&(res.header));
 					free_buffer(&(res.body));
-					//close connection gracefully
 					free_header(&(req.header));
 					free_buffer(&(req.body));
-					;
-					//reset buffer:
-					
-					//puts(buffer);
+
 				}
 			}
 		}

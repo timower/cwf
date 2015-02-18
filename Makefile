@@ -12,7 +12,7 @@ TESTS :=	test/allTests.o \
 			test/headerTest.o \
 			test/requestTest.o \
 			test/CuTest.o
-CFLAGS := -ggdb
+CFLAGS := -ggdb -Wall
 
 all: server
 
