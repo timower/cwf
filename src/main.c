@@ -17,6 +17,14 @@ void basic_route(request_t* req, response_t* res) {
 	
 }
 
+void lol_route(request_t* req, response_t* res) {
+	append_bufferStr(&(res->body), "<h1>hello, lol</h1>");
+	append_bufferStr(&(res->body), "<br/>test<br />");
+	append_bufferStr(&(res->body), req->rp.params[0]);
+	
+}
+
+
 int main(int argc, char* argv[]){
 	if (argc < 2) {
 		puts("need port");
@@ -26,7 +34,7 @@ int main(int argc, char* argv[]){
 
 	app_t* a = new_app();
 	set_route(a, "/", basic_route);
-	set_route(a, "/lol", basic_route);
+	set_route(a, "/%/lol", lol_route);
 	
 	CWF_start(a, port);
 	free(a);
